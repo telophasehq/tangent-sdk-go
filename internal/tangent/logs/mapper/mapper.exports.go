@@ -8,11 +8,6 @@ import (
 
 // Exports represents the caller-defined exports from "tangent:logs/mapper@0.1.0".
 var Exports struct {
-	// Schema represents the caller-defined, exported function "schema".
-	//
-	//	schema: func() -> string
-	Schema func() (result string)
-
 	// Metadata represents the caller-defined, exported function "metadata".
 	//
 	//	metadata: func() -> meta

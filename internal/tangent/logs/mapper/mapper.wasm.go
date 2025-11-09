@@ -8,14 +8,6 @@ import (
 
 // This file contains wasmimport and wasmexport declarations for "tangent:logs@0.1.0".
 
-//go:wasmexport tangent:logs/mapper@0.1.0#schema
-//export tangent:logs/mapper@0.1.0#schema
-func wasmexport_Schema() (result *string) {
-	result_ := Exports.Schema()
-	result = &result_
-	return
-}
-
 //go:wasmexport tangent:logs/mapper@0.1.0#metadata
 //export tangent:logs/mapper@0.1.0#metadata
 func wasmexport_Metadata() (result *Meta) {
