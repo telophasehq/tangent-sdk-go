@@ -20,6 +20,6 @@ var Exports struct {
 
 	// ProcessLogs represents the caller-defined, exported function "process-logs".
 	//
-	//	process-logs: func(input: list<borrow<logview>>) -> result<list<outval>, string>
-	ProcessLogs func(input cm.List[cm.Rep]) (result cm.Result[cm.List[Outval], cm.List[Outval], string])
+	//	process-logs: func(input: list<borrow<logview>>) -> result<batchout, string>
+	ProcessLogs func(input cm.List[cm.Rep]) (result cm.Result[BatchoutShape, Batchout, string])
 }

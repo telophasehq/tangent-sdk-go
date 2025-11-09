@@ -75,17 +75,10 @@ func main() {
 	pkg := pkgs[0]
 
 	// Discover the output type by locating a call to tangent_sdk.Wire[T](...)
-	name, st := findWireOutputType(pkg)
-	if st == nil || name == "" {
-		log.Fatalf("could not infer output type: ensure there is a call to Wire[T](...) with T being a named struct in this package")
+	toGenerate := findWireOutputTypes(pkg)
+	if len(toGenerate) == 0 {
+		log.Fatalf("no Wire[T] instantiations found; pass -types or add a tangentgen shim")
 	}
-
-	// Collect type objects
-	var selected *genType
-	selected = &genType{strct: st}
-
-	// Analyze fields
-	selected.fields = analyzeStruct(selected.strct)
 
 	// Build output
 	var out bytes.Buffer
@@ -95,7 +88,11 @@ func main() {
 	fmt.Fprintf(&out, "\tpluginout %q\n", "github.com/telophasehq/tangent-sdk-go")
 	out.WriteString(")\n\n")
 
-	generateAll(&out, name, selected.fields)
+	for name, st := range toGenerate {
+		fields := analyzeStruct(st)
+
+		generateAll(&out, name, fields)
+	}
 
 	// gofmt
 	formatted, err := format.Source(out.Bytes())
@@ -103,7 +100,7 @@ func main() {
 	if outFile != "" {
 		outPath = outFile
 	} else {
-		outPath = fmt.Sprintf("%s_outval_gen.go", name)
+		outPath = "outval_gen.go"
 	}
 	if err != nil {
 		// write raw for debugging
@@ -121,52 +118,37 @@ func main() {
 // findWireOutputType searches the package's syntax for a call to
 // github.com/telophasehq/tangent-sdk-go.Wire[T](...) and returns the
 // name of T and its underlying struct type. Only named struct types are supported.
-func findWireOutputType(pkg *packages.Package) (string, *types.Struct) {
+func findWireOutputTypes(pkg *packages.Package) map[string]*types.Struct {
 	const tangentImportPath = "github.com/telophasehq/tangent-sdk-go"
-	var (
-		foundName string
-		foundSt   *types.Struct
-	)
+	out := map[string]*types.Struct{}
 	for _, f := range pkg.Syntax {
 		ast.Inspect(f, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
 			}
-			// Handle Wire[...] instantiation: either IndexExpr (single) or IndexListExpr (go1.18+)
 			switch fun := call.Fun.(type) {
 			case *ast.IndexExpr:
 				if !isTangentWire(pkg, fun.X, tangentImportPath) {
 					return true
 				}
-				if fun.Index == nil {
-					return true
-				}
 				if name, st := extractNamedStructType(pkg, fun.Index); st != nil {
-					foundName, foundSt = name, st
-					return false
+					out[name] = st
 				}
 			case *ast.IndexListExpr:
 				if !isTangentWire(pkg, fun.X, tangentImportPath) {
 					return true
 				}
-				if len(fun.Indices) == 0 {
-					return true
+				if len(fun.Indices) > 0 {
+					if name, st := extractNamedStructType(pkg, fun.Indices[0]); st != nil {
+						out[name] = st
+					}
 				}
-				if name, st := extractNamedStructType(pkg, fun.Indices[0]); st != nil {
-					foundName, foundSt = name, st
-					return false
-				}
-			default:
-				return true
 			}
 			return true
 		})
-		if foundSt != nil {
-			break
-		}
 	}
-	return foundName, foundSt
+	return out
 }
 
 // isTangentWire reports whether expr is a selector to the Wire symbol in the tangent SDK import.
@@ -220,8 +202,8 @@ func generateAll(buf *bytes.Buffer, rootName string, rootFields []fieldSpec) {
 		seen[typeName] = true
 
 		fmt.Fprintf(buf, "// AppendToArena appends %s into the arena as an object and returns the root node index.\n", typeName)
-		fmt.Fprintf(buf, "func (x %s) AppendToArena(ab *pluginout.ArenaBuilder) uint32 {\n", typeName)
-		fmt.Fprintf(buf, "\tab.ObjectStart()\n\n")
+		fmt.Fprintf(buf, "func (x %s) AppendToArena(ab *pluginout.ArenaBuilder, st *pluginout.StringTable) uint32 {\n", typeName)
+		fmt.Fprintf(buf, "\tab.ObjectStartReserve(%d)\n\n", len(fields))
 		emitFields(buf, "x", fields, structsToGen)
 		fmt.Fprintf(buf, "\n\treturn ab.ObjectEnd()\n")
 		fmt.Fprintf(buf, "}\n\n")
@@ -239,14 +221,14 @@ func emitFields(buf *bytes.Buffer, recv string, fields []fieldSpec, structsToGen
 					fmt.Fprintf(buf, "\tif %s.%s != nil {\n", recv, f.goName)
 				}
 				fmt.Fprintf(buf, "\t\t%s_str_idx := ab.String(*%s.%s)\n", f.goName, recv, f.goName)
-				fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, %s_str_idx))\n", f.name, f.goName)
+				fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_str_idx)\n", f.name, f.goName)
 				fmt.Fprintf(buf, "\t}\n")
 			} else {
 				if f.omitempty {
 					fmt.Fprintf(buf, "\tif %s.%s != \"\" {\n", recv, f.goName)
 				}
 				fmt.Fprintf(buf, "\t\t%s_str_idx := ab.String(%s.%s)\n", f.goName, recv, f.goName)
-				fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, %s_str_idx))\n", f.name, f.goName)
+				fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_str_idx)\n", f.name, f.goName)
 				if f.omitempty {
 					fmt.Fprintf(buf, "\t}\n")
 				}
@@ -259,14 +241,14 @@ func emitFields(buf *bytes.Buffer, recv string, fields []fieldSpec, structsToGen
 					fmt.Fprintf(buf, "\tif %s.%s != nil {\n", recv, f.goName)
 				}
 				fmt.Fprintf(buf, "\t\t%s_bool_idx := ab.Bool(*%s.%s)\n", f.goName, recv, f.goName)
-				fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, %s_bool_idx))\n", f.name, f.goName)
+				fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_bool_idx)\n", f.name, f.goName)
 				fmt.Fprintf(buf, "\t}\n")
 			} else {
 				if f.omitempty {
 					fmt.Fprintf(buf, "\tif %s.%s {\n", recv, f.goName)
 				}
 				fmt.Fprintf(buf, "\t\t%s_bool_idx := ab.Bool(%s.%s)\n", f.goName, recv, f.goName)
-				fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, %s_bool_idx))\n", f.name, f.goName)
+				fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_bool_idx)\n", f.name, f.goName)
 				if f.omitempty {
 					fmt.Fprintf(buf, "\t}\n")
 				}
@@ -279,14 +261,14 @@ func emitFields(buf *bytes.Buffer, recv string, fields []fieldSpec, structsToGen
 					fmt.Fprintf(buf, "\tif %s.%s != nil {\n", recv, f.goName)
 				}
 				fmt.Fprintf(buf, "\t\t%s_int_idx := ab.Int(int64(*%s.%s))\n", f.goName, recv, f.goName)
-				fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, %s_int_idx))\n", f.name, f.goName)
+				fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_int_idx)\n", f.name, f.goName)
 				fmt.Fprintf(buf, "\t}\n")
 			} else {
 				if f.omitempty {
 					fmt.Fprintf(buf, "\tif %s.%s != 0 {\n", recv, f.goName)
 				}
 				fmt.Fprintf(buf, "\t\t%s_int_idx := ab.Int(int64(%s.%s))\n", f.goName, recv, f.goName)
-				fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, %s_int_idx))\n", f.name, f.goName)
+				fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_int_idx)\n", f.name, f.goName)
 				if f.omitempty {
 					fmt.Fprintf(buf, "\t}\n")
 				}
@@ -299,14 +281,14 @@ func emitFields(buf *bytes.Buffer, recv string, fields []fieldSpec, structsToGen
 					fmt.Fprintf(buf, "\tif %s.%s != nil {\n", recv, f.goName)
 				}
 				fmt.Fprintf(buf, "\t\t%s_float_idx := ab.Float(float64(*%s.%s))\n", f.goName, recv, f.goName)
-				fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, %s_float_idx))\n", f.name, f.goName)
+				fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_float_idx)\n", f.name, f.goName)
 				fmt.Fprintf(buf, "\t}\n")
 			} else {
 				if f.omitempty {
 					fmt.Fprintf(buf, "\tif %s.%s != 0 {\n", recv, f.goName)
 				}
 				fmt.Fprintf(buf, "\t\t%s_float_idx := ab.Float(float64(%s.%s))\n", f.goName, recv, f.goName)
-				fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, %s_float_idx))\n", f.name, f.goName)
+				fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_float_idx)\n", f.name, f.goName)
 				if f.omitempty {
 					fmt.Fprintf(buf, "\t}\n")
 				}
@@ -316,7 +298,7 @@ func emitFields(buf *bytes.Buffer, recv string, fields []fieldSpec, structsToGen
 				fmt.Fprintf(buf, "\tif len(%s.%s) != 0 {\n", recv, f.goName)
 			}
 			fmt.Fprintf(buf, "\t\t%s_bytes_idx := ab.Bytes(%s.%s)\n", f.goName, recv, f.goName)
-			fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, %s_bytes_idx))\n", f.name, f.goName)
+			fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_bytes_idx)\n", f.name, f.goName)
 			if f.omitempty {
 				fmt.Fprintf(buf, "\t}\n")
 			}
@@ -328,35 +310,35 @@ func emitFields(buf *bytes.Buffer, recv string, fields []fieldSpec, structsToGen
 				} else {
 					fmt.Fprintf(buf, "\tif %s.%s != nil {\n", recv, f.goName)
 				}
-				fmt.Fprintf(buf, "\t\tab.ArrayStart()\n")
+				fmt.Fprintf(buf, "\t\tab.ArrayStartReserve(len(*%s.%s))\n", recv, f.goName)
 				fmt.Fprintf(buf, "\t\tfor i := range (*%s.%s) {\n", recv, f.goName)
 				if _, ok := f.elem.(*types.Named); ok {
-					fmt.Fprintf(buf, "\t\t\tab.ArrayAdd((*%s.%s)[i].AppendToArena(ab))\n", recv, f.goName)
+					fmt.Fprintf(buf, "\t\t\tab.ArrayAdd((*%s.%s)[i].AppendToArena(ab, st))\n", recv, f.goName)
 				} else if kind := classify(f.elem); kind != fkUnsupported {
 					emitElemAppend(buf, "(*"+recv+"."+f.goName+")[i]", kind)
 				} else {
-					fmt.Fprintf(buf, "\t\t\tab.ArrayAdd((*%s.%s)[i].AppendToArena(ab))\n", recv, f.goName)
+					fmt.Fprintf(buf, "\t\t\tab.ArrayAdd((*%s.%s)[i].AppendToArena(ab, st))\n", recv, f.goName)
 				}
 				fmt.Fprintf(buf, "\t\t}\n")
-				fmt.Fprintf(buf, "\t\tidx := ab.ArrayEnd()\n")
-				fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, idx))\n", f.name)
+				fmt.Fprintf(buf, "\t\t%s_slice_idx := ab.ArrayEnd()\n", f.goName)
+				fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_slice_idx)\n", f.name, f.goName)
 				fmt.Fprintf(buf, "\t}\n")
 			} else {
 				if f.omitempty {
 					fmt.Fprintf(buf, "\tif len(%s.%s) != 0 {\n", recv, f.goName)
 				}
-				fmt.Fprintf(buf, "\t\tab.ArrayStart()\n")
+				fmt.Fprintf(buf, "\t\tab.ArrayStartReserve(len(%s.%s))\n", recv, f.goName)
 				fmt.Fprintf(buf, "\t\tfor i := range %s.%s {\n", recv, f.goName)
 				if _, ok := f.elem.(*types.Named); ok {
-					fmt.Fprintf(buf, "\t\t\tab.ArrayAdd(%s.%s[i].AppendToArena(ab))\n", recv, f.goName)
+					fmt.Fprintf(buf, "\t\t\tab.ArrayAdd(%s.%s[i].AppendToArena(ab, st))\n", recv, f.goName)
 				} else if kind := classify(f.elem); kind != fkUnsupported {
 					emitElemAppend(buf, recv+"."+f.goName+"[i]", kind)
 				} else {
-					fmt.Fprintf(buf, "\t\t\tab.ArrayAdd(%s.%s[i].AppendToArena(ab))\n", recv, f.goName)
+					fmt.Fprintf(buf, "\t\t\tab.ArrayAdd(%s.%s[i].AppendToArena(ab, st))\n", recv, f.goName)
 				}
 				fmt.Fprintf(buf, "\t\t}\n")
-				fmt.Fprintf(buf, "\t\tidx := ab.ArrayEnd()\n")
-				fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, idx))\n", f.name)
+				fmt.Fprintf(buf, "\t\t%s_slice_idx := ab.ArrayEnd()\n", f.goName)
+				fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_slice_idx)\n", f.name, f.goName)
 				if f.omitempty {
 					fmt.Fprintf(buf, "\t}\n")
 				}
@@ -368,35 +350,35 @@ func emitFields(buf *bytes.Buffer, recv string, fields []fieldSpec, structsToGen
 				} else {
 					fmt.Fprintf(buf, "\tif %s.%s != nil {\n", recv, f.goName)
 				}
-				fmt.Fprintf(buf, "\t\tab.ObjectStart()\n")
+				fmt.Fprintf(buf, "\t\tab.ObjectStartReserve(len(*%s.%s))\n", recv, f.goName)
 				fmt.Fprintf(buf, "\t\tfor k, v := range *%s.%s {\n", recv, f.goName)
 				if _, ok := f.elem.(*types.Named); ok {
-					fmt.Fprintf(buf, "\t\t\tab.ObjectAdd(ab.Field(k, v.AppendToArena(ab)))\n")
+					fmt.Fprintf(buf, "\t\t\tab.ObjectAdd(ab.Field(k, v.AppendToArena(ab, st)))\n")
 				} else if kind := classify(f.elem); kind != fkUnsupported {
 					emitElemAppendKV(buf, "v", kind)
 				} else {
-					fmt.Fprintf(buf, "\t\t\tab.ObjectAdd(ab.Field(k, v.AppendToArena(ab)))\n")
+					fmt.Fprintf(buf, "\t\t\tab.ObjectAdd(ab.Field(k, v.AppendToArena(ab, st)))\n")
 				}
 				fmt.Fprintf(buf, "\t\t}\n")
-				fmt.Fprintf(buf, "\t\tidx := ab.ObjectEnd()\n")
-				fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, idx))\n", f.name)
+				fmt.Fprintf(buf, "\t\t%s_map_idx := ab.ObjectEnd()\n", f.goName)
+				fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_map_idx)\n", f.name, f.goName)
 				fmt.Fprintf(buf, "\t}\n")
 			} else {
 				if f.omitempty {
 					fmt.Fprintf(buf, "\tif len(%s.%s) != 0 {\n", recv, f.goName)
 				}
-				fmt.Fprintf(buf, "\t\tab.ObjectStart()\n")
+				fmt.Fprintf(buf, "\t\tab.ObjectStartReserve(len(%s.%s))\n", recv, f.goName)
 				fmt.Fprintf(buf, "\t\tfor k, v := range %s.%s {\n", recv, f.goName)
 				if _, ok := f.elem.(*types.Named); ok {
-					fmt.Fprintf(buf, "\t\t\tab.ObjectAdd(ab.Field(k, v.AppendToArena(ab)))\n")
+					fmt.Fprintf(buf, "\t\t\tab.ObjectAdd(ab.Field(k, v.AppendToArena(ab, st)))\n")
 				} else if kind := classify(f.elem); kind != fkUnsupported {
 					emitElemAppendKV(buf, "v", kind)
 				} else {
-					fmt.Fprintf(buf, "\t\t\tab.ObjectAdd(ab.Field(k, v.AppendToArena(ab)))\n")
+					fmt.Fprintf(buf, "\t\t\tab.ObjectAdd(ab.Field(k, v.AppendToArena(ab, st)))\n")
 				}
 				fmt.Fprintf(buf, "\t\t}\n")
-				fmt.Fprintf(buf, "\t\tidx := ab.ObjectEnd()\n")
-				fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, idx))\n", f.name)
+				fmt.Fprintf(buf, "\t\t%s_map_idx := ab.ObjectEnd()\n", f.goName)
+				fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_map_idx)\n", f.name, f.goName)
 				if f.omitempty {
 					fmt.Fprintf(buf, "\t}\n")
 				}
@@ -405,13 +387,13 @@ func emitFields(buf *bytes.Buffer, recv string, fields []fieldSpec, structsToGen
 			if f.named != nil {
 				if f.isPtr {
 					fmt.Fprintf(buf, "\tif %s.%s != nil {\n", recv, f.goName)
-					fmt.Fprintf(buf, "\t\tidx := %s.%s.AppendToArena(ab)\n", recv, f.goName)
-					fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, idx))\n", f.name)
+					fmt.Fprintf(buf, "\t\t%s_struct_idx := %s.%s.AppendToArena(ab, st)\n", f.goName, recv, f.goName)
+					fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_struct_idx)\n", f.name, f.goName)
 					fmt.Fprintf(buf, "\t}\n")
 				} else {
 					fmt.Fprintf(buf, "\t{\n")
-					fmt.Fprintf(buf, "\t\tidx := %s.%s.AppendToArena(ab)\n", recv, f.goName)
-					fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, idx))\n", f.name)
+					fmt.Fprintf(buf, "\t\t%s_struct_idx := %s.%s.AppendToArena(ab, st)\n", f.goName, recv, f.goName)
+					fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_struct_idx)\n", f.name, f.goName)
 					fmt.Fprintf(buf, "\t}\n")
 				}
 				tn := f.named.Obj().Name()
@@ -421,17 +403,18 @@ func emitFields(buf *bytes.Buffer, recv string, fields []fieldSpec, structsToGen
 			} else {
 				if f.isPtr {
 					fmt.Fprintf(buf, "\tif %s.%s != nil {\n", recv, f.goName)
-					fmt.Fprintf(buf, "\t\tab.ObjectStart()\n")
+					fmt.Fprintf(buf, "\t\tab.ObjectStartReserve(%d)\n", len(f.fields))
 					emitFields(buf, "(*"+recv+"."+f.goName+")", f.fields, structsToGen)
-					fmt.Fprintf(buf, "\t\tidx := ab.ObjectEnd()\n")
-					fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, idx))\n", f.name)
+					fmt.Fprintf(buf, "\t\t%s_struct_idx := ab.ObjectEnd()\n", f.goName)
+					fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_struct_idx)\n", f.name, f.goName)
+
 					fmt.Fprintf(buf, "\t}\n")
 				} else {
 					fmt.Fprintf(buf, "\t{\n")
-					fmt.Fprintf(buf, "\t\tab.ObjectStart()\n")
+					fmt.Fprintf(buf, "\t\tab.ObjectStartReserve(%d)\n", len(f.fields))
 					emitFields(buf, recv+"."+f.goName, f.fields, structsToGen)
-					fmt.Fprintf(buf, "\t\tidx := ab.ObjectEnd()\n")
-					fmt.Fprintf(buf, "\t\tab.ObjectAdd(ab.Field(%q, idx))\n", f.name)
+					fmt.Fprintf(buf, "\t\t%s_struct_idx := ab.ObjectEnd()\n", f.goName)
+					fmt.Fprintf(buf, "\t\tab.ObjectAddFieldKey(%q, %s_struct_idx)\n", f.name, f.goName)
 					fmt.Fprintf(buf, "\t}\n")
 				}
 			}
@@ -461,17 +444,15 @@ func emitElemAppend(buf *bytes.Buffer, expr string, kind fieldKind) {
 func emitElemAppendKV(buf *bytes.Buffer, expr string, kind fieldKind) {
 	switch kind {
 	case fkString:
-		fmt.Fprintf(buf, "\t\t\tab.ObjectAdd(ab.Field(k, ab.String(%s)))\n", expr)
+		fmt.Fprintf(buf, "\t\t\tab.ObjectAddFieldKey(k, ab.String(%s))\n", expr)
 	case fkBool:
-		fmt.Fprintf(buf, "\t\t\tab.ObjectAdd(ab.Field(k, ab.Bool(%s)))\n", expr)
+		fmt.Fprintf(buf, "\t\t\tab.ObjectAddFieldKey(k, ab.Bool(%s))\n", expr)
 	case fkInt:
-		fmt.Fprintf(buf, "\t\t\tab.ObjectAdd(ab.Field(k, ab.Int(int64(%s))))\n", expr)
+		fmt.Fprintf(buf, "\t\t\tab.ObjectAddFieldKey(k, ab.Int(int64(%s)))\n", expr)
 	case fkFloat:
-		fmt.Fprintf(buf, "\t\t\tab.ObjectAdd(ab.Field(k, ab.Float(float64(%s))))\n", expr)
+		fmt.Fprintf(buf, "\t\t\tab.ObjectAddFieldKey(k, ab.Float(float64(%s)))\n", expr)
 	case fkBytes:
-		fmt.Fprintf(buf, "\t\t\tab.ObjectAdd(ab.Field(k, ab.Bytes(%s)))\n", expr)
-	default:
-		// no-op
+		fmt.Fprintf(buf, "\t\t\tab.ObjectAddFieldKey(k, ab.Bytes(%s))\n", expr)
 	}
 }
 
@@ -552,12 +533,12 @@ func analyzeStruct(st *types.Struct) []fieldSpec {
 }
 
 func parseOutTag(tag string, defaultName string) (name string, omitempty bool, skip bool) {
-	const key = "`out:\""
-	i := strings.Index(tag, `out:"`)
+	const key = "`json:\""
+	i := strings.Index(tag, `json:"`)
 	if i < 0 {
 		return defaultName, false, false
 	}
-	j := i + len(`out:"`)
+	j := i + len(`json:"`)
 	k := strings.Index(tag[j:], `"`)
 	if k < 0 {
 		return defaultName, false, false

@@ -12,14 +12,14 @@ import (
 
 type Log = log.Logview
 
-// Handler processes a batch and writes NDJSON output to emitter.
 type ProcessLogs[T any] func(Log) (T, error)
 
-var arenaPool = sync.Pool{
-	New: func() any {
-		return NewArenaBuilder(1024)
-	},
+type OutvalMarshaler interface {
+	AppendToArena(ab *ArenaBuilder, st *StringTable) (root uint32)
 }
+
+var arenaPool = sync.Pool{New: func() any { return NewArenaBuilder(1024) }}
+var stringsPool = sync.Pool{New: func() any { return NewStringTable(32) }}
 
 // Wire connects metadata, probe selectors, and a handler to Tangent's ABI.
 func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLogs[T]) {
@@ -39,14 +39,22 @@ func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLogs[T]) {
 		return cm.ToList(mapped)
 	}
 
-	mapper.Exports.ProcessLogs = func(input cm.List[cm.Rep]) (res cm.Result[cm.List[mapper.Outval], cm.List[mapper.Outval], string]) {
+	mapper.Exports.ProcessLogs = func(input cm.List[cm.Rep]) (res cm.Result[mapper.BatchoutShape, mapper.Batchout, string]) {
 		batch := append([]cm.Rep(nil), input.Slice()...)
 		logs := make([]Log, len(batch))
-		outvals := make([]mapper.Outval, 0, len(batch))
+
 		ab := arenaPool.Get().(*ArenaBuilder)
+		st := stringsPool.Get().(*StringTable)
+		ab.Reset()
+		st.Reset()
+		ab.UseStringTable(st)
+		roots := make([]mapper.Idx, 0, len(batch))
+
 		defer func() {
 			ab.Reset()
 			arenaPool.Put(ab)
+			st.Reset()
+			stringsPool.Put(st)
 		}()
 		for i := range batch {
 			logs[i] = Log(batch[i])
@@ -57,15 +65,22 @@ func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLogs[T]) {
 				res.SetErr(err.Error())
 				return
 			}
-			ab.Reset()
+
 			if m, ok := any(out).(OutvalMarshaler); ok {
-				root := m.AppendToArena(ab)
-				outvals = append(outvals, ab.Build(root))
+				root := m.AppendToArena(ab, st)
+				roots = append(roots, mapper.Idx(root))
 				continue
 			}
+
 		}
 
-		res.SetOK(cm.ToList(outvals))
+		bo := mapper.Batchout{
+			Strings: cm.ToList(st.Keys()),
+			Arena:   cm.ToList(ab.arena),
+			Roots:   cm.ToList(roots),
+		}
+
+		res.SetOK(bo)
 		return
 	}
 }

@@ -1,3 +1,5 @@
+//go:generate env GOFLAGS=-tags=tangentgen go run ../gen -o arena_gen_tests.go
+
 package tests
 
 type MyStructAnon struct {

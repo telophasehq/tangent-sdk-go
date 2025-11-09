@@ -12,3 +12,9 @@ type TupleStringScalarShape struct {
 	_     cm.HostLayout
 	shape [unsafe.Sizeof(cm.Tuple[string, Scalar]{})]byte
 }
+
+// BatchoutShape is used for storage in variant or result types.
+type BatchoutShape struct {
+	_     cm.HostLayout
+	shape [unsafe.Sizeof(Batchout{})]byte
+}

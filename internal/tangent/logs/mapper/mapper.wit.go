@@ -142,13 +142,13 @@ type Idx uint32
 // Field represents the record "tangent:logs/mapper@0.1.0#field".
 //
 //	record field {
-//		key: string,
+//		keyid: u32,
 //		val: idx,
 //	}
 type Field struct {
-	_   cm.HostLayout `json:"-"`
-	Key string        `json:"key"`
-	Val Idx           `json:"val"`
+	_     cm.HostLayout `json:"-"`
+	Keyid uint32        `json:"keyid"`
+	Val   Idx           `json:"val"`
 }
 
 // Node represents the variant "tangent:logs/mapper@0.1.0#node".
@@ -262,19 +262,16 @@ func (v Node) String() string {
 	return _NodeStrings[v.Tag()]
 }
 
-// Arena represents the list "tangent:logs/mapper@0.1.0#arena".
+// Batchout represents the record "tangent:logs/mapper@0.1.0#batchout".
 //
-//	type arena = list<node>
-type Arena cm.List[Node]
-
-// Outval represents the record "tangent:logs/mapper@0.1.0#outval".
-//
-//	record outval {
-//		root: idx,
-//		arena: arena,
+//	record batchout {
+//		strings: list<string>,
+//		arena: list<node>,
+//		roots: list<idx>,
 //	}
-type Outval struct {
-	_     cm.HostLayout `json:"-"`
-	Root  Idx           `json:"root"`
-	Arena Arena         `json:"arena"`
+type Batchout struct {
+	_       cm.HostLayout   `json:"-"`
+	Strings cm.List[string] `json:"strings"`
+	Arena   cm.List[Node]   `json:"arena"`
+	Roots   cm.List[Idx]    `json:"roots"`
 }
