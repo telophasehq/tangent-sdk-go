@@ -2,7 +2,6 @@ package tangent_sdk
 
 import (
 	"errors"
-	"reflect"
 
 	"github.com/telophasehq/tangent-sdk-go/internal/tangent/logs/log"
 	"github.com/telophasehq/tangent-sdk-go/internal/tangent/logs/mapper"
@@ -19,17 +18,6 @@ type ProcessLogs[T any] func(Log) (T, error)
 func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLogs[T]) {
 	if handler == nil {
 		panic(errors.New("handler must not be nil"))
-	}
-
-	mapper.Exports.Schema = func() string {
-		t := reflect.TypeOf(new(T)).Elem()
-		for t.Kind() == reflect.Pointer {
-			t = t.Elem()
-		}
-		if n := t.Name(); n != "" {
-			return n
-		}
-		return t.String()
 	}
 
 	mapper.Exports.Metadata = func() mapper.Meta {
