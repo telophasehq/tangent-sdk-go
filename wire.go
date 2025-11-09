@@ -2,6 +2,7 @@ package tangent_sdk
 
 import (
 	"errors"
+	"sync"
 
 	"github.com/telophasehq/tangent-sdk-go/internal/tangent/logs/log"
 	"github.com/telophasehq/tangent-sdk-go/internal/tangent/logs/mapper"
@@ -13,6 +14,12 @@ type Log = log.Logview
 
 // Handler processes a batch and writes NDJSON output to emitter.
 type ProcessLogs[T any] func(Log) (T, error)
+
+var arenaPool = sync.Pool{
+	New: func() any {
+		return NewArenaBuilder(1024)
+	},
+}
 
 // Wire connects metadata, probe selectors, and a handler to Tangent's ABI.
 func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLogs[T]) {
@@ -36,7 +43,11 @@ func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLogs[T]) {
 		batch := append([]cm.Rep(nil), input.Slice()...)
 		logs := make([]Log, len(batch))
 		outvals := make([]mapper.Outval, 0, len(batch))
-		ab := NewArenaBuilder(256)
+		ab := arenaPool.Get().(*ArenaBuilder)
+		defer func() {
+			ab.Reset()
+			arenaPool.Put(ab)
+		}()
 		for i := range batch {
 			logs[i] = Log(batch[i])
 
