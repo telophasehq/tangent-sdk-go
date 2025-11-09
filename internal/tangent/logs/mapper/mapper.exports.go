@@ -10,8 +10,8 @@ import (
 var Exports struct {
 	// Schema represents the caller-defined, exported function "schema".
 	//
-	//	schema: func() -> list<u8>
-	Schema func() (result cm.List[uint8])
+	//	schema: func() -> string
+	Schema func() (result string)
 
 	// Metadata represents the caller-defined, exported function "metadata".
 	//

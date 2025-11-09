@@ -10,7 +10,7 @@ import (
 
 //go:wasmexport tangent:logs/mapper@0.1.0#schema
 //export tangent:logs/mapper@0.1.0#schema
-func wasmexport_Schema() (result *cm.List[uint8]) {
+func wasmexport_Schema() (result *string) {
 	result_ := Exports.Schema()
 	result = &result_
 	return
