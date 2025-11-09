@@ -1,6 +1,8 @@
 package tangent_sdk
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"sync"
 
@@ -10,16 +12,13 @@ import (
 	"go.bytecodealliance.org/cm"
 )
 
+var (
+	bufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+)
+
 type Log = log.Logview
 
 type ProcessLogs[T any] func(Log) (T, error)
-
-type OutvalMarshaler interface {
-	AppendToArena(ab *ArenaBuilder, st *StringTable) (root uint32)
-}
-
-var arenaPool = sync.Pool{New: func() any { return NewArenaBuilder(1024) }}
-var stringsPool = sync.Pool{New: func() any { return NewStringTable(32) }}
 
 // Wire connects metadata, probe selectors, and a handler to Tangent's ABI.
 func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLogs[T]) {
@@ -39,48 +38,31 @@ func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLogs[T]) {
 		return cm.ToList(mapped)
 	}
 
-	mapper.Exports.ProcessLogs = func(input cm.List[cm.Rep]) (res cm.Result[mapper.BatchoutShape, mapper.Batchout, string]) {
-		batch := append([]cm.Rep(nil), input.Slice()...)
-		logs := make([]Log, len(batch))
+	mapper.Exports.ProcessLogs = func(input cm.List[cm.Rep]) (res cm.Result[cm.List[uint8], cm.List[uint8], string]) {
+		buf := bufPool.Get().(*bytes.Buffer)
+		buf.Reset()
+		defer bufPool.Put(buf)
 
-		ab := arenaPool.Get().(*ArenaBuilder)
-		st := stringsPool.Get().(*StringTable)
-		ab.Reset()
-		st.Reset()
-		ab.UseStringTable(st)
-		roots := make([]mapper.Idx, 0, len(batch))
+		items := append([]cm.Rep(nil), input.Slice()...)
+		for i := range items {
 
-		defer func() {
-			ab.Reset()
-			arenaPool.Put(ab)
-			st.Reset()
-			stringsPool.Put(st)
-		}()
-		for i := range batch {
-			logs[i] = Log(batch[i])
-
-			out, err := handler(logs[i])
-			logs[i].ResourceDrop()
+			out, err := handler(Log(items[i]))
 			if err != nil {
 				res.SetErr(err.Error())
 				return
 			}
 
-			if m, ok := any(out).(OutvalMarshaler); ok {
-				root := m.AppendToArena(ab, st)
-				roots = append(roots, mapper.Idx(root))
-				continue
+			Log(items[i]).ResourceDrop()
+
+			err = json.NewEncoder(buf).Encode(out)
+			if err != nil {
+				res.SetErr(err.Error())
+				return
 			}
 
 		}
 
-		bo := mapper.Batchout{
-			Strings: cm.ToList(st.Keys()),
-			Arena:   cm.ToList(ab.arena),
-			Roots:   cm.ToList(roots),
-		}
-
-		res.SetOK(bo)
+		res.SetOK(cm.ToList(buf.Bytes()))
 		return
 	}
 }
