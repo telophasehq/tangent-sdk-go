@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"go/ast"
 	"go/format"
@@ -52,6 +53,10 @@ type genType struct {
 func main() {
 	log.SetFlags(0)
 
+	var outFile string
+	flag.StringVar(&outFile, "o", "", "output filename for generated code (e.g., path/to/file.go); defaults to <Type>_outval_gen.go")
+	flag.Parse()
+
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
 			packages.NeedCompiledGoFiles | packages.NeedTypes | packages.NeedTypesInfo,
@@ -94,15 +99,21 @@ func main() {
 
 	// gofmt
 	formatted, err := format.Source(out.Bytes())
-	outStem := fmt.Sprintf("%s_outval_gen", name)
+	var outPath string
+	if outFile != "" {
+		outPath = outFile
+	} else {
+		outPath = fmt.Sprintf("%s_outval_gen.go", name)
+	}
 	if err != nil {
 		// write raw for debugging
-		_ = os.WriteFile(outStem+".go.raw", out.Bytes(), 0644)
-		log.Fatalf("format: %v (wrote %s.raw)", err, outStem+".go")
+		rawPath := outPath + ".raw"
+		_ = os.WriteFile(rawPath, out.Bytes(), 0644)
+		log.Fatalf("format: %v (wrote %s)", err, rawPath)
 	}
 
 	// write file near the package
-	if err := os.WriteFile(outStem+".go", formatted, 0644); err != nil {
+	if err := os.WriteFile(outPath, formatted, 0644); err != nil {
 		log.Fatalf("write: %v", err)
 	}
 }
