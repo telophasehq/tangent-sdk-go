@@ -4,8 +4,8 @@
 package types
 
 import (
-	wallclock "github.com/telophasehq/tangent_sdk/internal/wasi/clocks/wall-clock"
-	"github.com/telophasehq/tangent_sdk/internal/wasi/io/streams"
+	wallclock "github.com/telophasehq/tangent-sdk-go/internal/wasi/clocks/wall-clock"
+	"github.com/telophasehq/tangent-sdk-go/internal/wasi/io/streams"
 	"go.bytecodealliance.org/cm"
 )
 

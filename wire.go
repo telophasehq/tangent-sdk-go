@@ -3,8 +3,8 @@ package tangent_sdk
 import (
 	"errors"
 
-	"github.com/telophasehq/tangent_sdk/internal/tangent/logs/log"
-	"github.com/telophasehq/tangent_sdk/internal/tangent/logs/mapper"
+	"github.com/telophasehq/tangent-sdk-go/internal/tangent/logs/log"
+	"github.com/telophasehq/tangent-sdk-go/internal/tangent/logs/mapper"
 
 	"go.bytecodealliance.org/cm"
 )

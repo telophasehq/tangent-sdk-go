@@ -3,7 +3,7 @@ package tests
 import (
 	"testing"
 
-	tangent "github.com/telophasehq/tangent_sdk"
+	tangent "github.com/telophasehq/tangent-sdk-go"
 )
 
 func BenchmarkArena_vs_JSON(b *testing.B) {

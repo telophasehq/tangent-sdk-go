@@ -4,7 +4,7 @@
 package preopens
 
 import (
-	"github.com/telophasehq/tangent_sdk/internal/wasi/filesystem/types"
+	"github.com/telophasehq/tangent-sdk-go/internal/wasi/filesystem/types"
 	"go.bytecodealliance.org/cm"
 )
 

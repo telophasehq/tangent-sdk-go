@@ -4,7 +4,7 @@
 package mapper
 
 import (
-	"github.com/telophasehq/tangent_sdk/internal/tangent/logs/log"
+	"github.com/telophasehq/tangent-sdk-go/internal/tangent/logs/log"
 	"go.bytecodealliance.org/cm"
 )
 

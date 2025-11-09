@@ -3,7 +3,7 @@
 package tests
 
 import (
-	pluginout "github.com/telophasehq/tangent_sdk"
+	pluginout "github.com/telophasehq/tangent-sdk-go"
 )
 
 // AppendToArena appends MyStruct into the arena as an object and returns the root node index.

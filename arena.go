@@ -1,7 +1,7 @@
 package tangent_sdk
 
 import (
-	"github.com/telophasehq/tangent_sdk/internal/tangent/logs/mapper"
+	"github.com/telophasehq/tangent-sdk-go/internal/tangent/logs/mapper"
 	"go.bytecodealliance.org/cm"
 )
 
