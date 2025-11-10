@@ -82,23 +82,18 @@ func main() {
 		log.Fatalf("no Wire[T] instantiations found; pass -types or add a tangentgen shim")
 	}
 
-	// Add //easyjson:json to those types in-place
-	changedFiles := annotateEasyJSON(pkg, toGenerate)
-	if len(changedFiles) == 0 {
-		log.Printf("no types annotated with //easyjson:json (already present or not found)")
-	} else {
-		if err := runEasyJSONTypesOnly(pkg, toGenerate); err != nil {
-			log.Fatalf("easyjson generate failed: %v", err)
-		}
+	err = runEasyJSONTypesOnly(pkg, toGenerate)
+	if err != nil {
+		log.Fatalf("easyjson generate failed: %v", err)
 	}
 }
 
 // findWireOutputType searches the package's syntax for a call to
 // github.com/telophasehq/tangent-sdk-go.Wire[T](...) and returns the
 // name of T and its underlying struct type. Only named struct types are supported.
-func findWireOutputTypes(pkg *packages.Package) map[string]*types.Struct {
+func findWireOutputTypes(pkg *packages.Package) map[*types.Named]*types.Struct {
 	const tangentImportPath = "github.com/telophasehq/tangent-sdk-go"
-	out := map[string]*types.Struct{}
+	out := map[*types.Named]*types.Struct{}
 	for _, f := range pkg.Syntax {
 		ast.Inspect(f, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
@@ -152,19 +147,19 @@ func isTangentWire(pkg *packages.Package, expr ast.Expr, wantPath string) bool {
 
 // extractNamedStructType resolves the type of the provided type argument expression,
 // ensuring it is a named struct (after pointer/alias deref). Returns the type name and struct.
-func extractNamedStructType(pkg *packages.Package, typeExpr ast.Expr) (string, *types.Struct) {
+func extractNamedStructType(pkg *packages.Package, typeExpr ast.Expr) (*types.Named, *types.Struct) {
 	tv, ok := pkg.TypesInfo.Types[typeExpr]
 	if !ok || tv.Type == nil {
-		return "", nil
+		return nil, nil
 	}
 	t := deref(tv.Type)
 	if n, ok := t.(*types.Named); ok {
 		if st, ok := deref(n.Underlying()).(*types.Struct); ok {
-			return n.Obj().Name(), st
+			return n, st
 		}
 	}
 	// Anonymous structs are not supported (cannot define methods)
-	return "", nil
+	return nil, nil
 }
 
 func deref(t types.Type) types.Type {
@@ -175,91 +170,6 @@ func deref(t types.Type) types.Type {
 		}
 		return t
 	}
-}
-
-func annotateEasyJSON(pkg *packages.Package, gens map[string]*types.Struct) []string {
-	// Build lookup set
-	nameSet := make(map[string]struct{}, len(gens))
-	for name := range gens {
-		nameSet[name] = struct{}{}
-	}
-
-	var changedFiles []string
-	fset := pkg.Fset
-
-	for _, file := range pkg.Syntax {
-		found := false
-
-		ast.Inspect(file, func(n ast.Node) bool {
-			genDecl, ok := n.(*ast.GenDecl)
-			if !ok || genDecl.Tok != token.TYPE {
-				return true
-			}
-			for _, spec := range genDecl.Specs {
-				ts, ok := spec.(*ast.TypeSpec)
-				if !ok {
-					continue
-				}
-				// target only named structs we care about
-				if _, ok := nameSet[ts.Name.Name]; !ok {
-					continue
-				}
-				if _, ok := ts.Type.(*ast.StructType); !ok {
-					continue
-				}
-				found = true
-
-				if hasEasyJSON(ts.Doc) || hasEasyJSON(genDecl.Doc) {
-					continue
-				}
-
-				// Attach the directive in a place the printer will actually emit:
-				// - if the declaration is grouped (type (...)), attach to the TypeSpec doc
-				// - otherwise attach to the GenDecl doc (spec.Doc is ignored for single-spec decls)
-				var targetDoc **ast.CommentGroup
-				var slash token.Pos
-				if genDecl.Lparen.IsValid() {
-					targetDoc = &ts.Doc
-					slash = ts.Pos() - 1
-				} else {
-					targetDoc = &genDecl.Doc
-					slash = genDecl.Pos() - 1
-				}
-				c := &ast.Comment{Slash: slash, Text: "//easyjson:json"}
-				if *targetDoc == nil {
-					*targetDoc = &ast.CommentGroup{List: []*ast.Comment{c}}
-				} else {
-					// ensure our inserted comment is earliest
-					if len((*targetDoc).List) > 0 && (*targetDoc).List[0].Slash <= c.Slash {
-						c.Slash = (*targetDoc).List[0].Slash - 1
-					}
-					(*targetDoc).List = append([]*ast.Comment{c}, (*targetDoc).List...)
-				}
-			}
-			return true
-		})
-
-		if found {
-			var buf bytes.Buffer
-			if err := printer.Fprint(&buf, fset, file); err != nil {
-				panic(err)
-			}
-
-			// Use the filename associated with this *ast.File via the FileSet
-			filename := fset.File(file.Package).Name()
-			if filename == "" {
-				// Fallback: derive from file.Pos()
-				filename = fset.Position(file.Pos()).Filename
-			}
-
-			if err := os.WriteFile(filename, buf.Bytes(), 0o644); err != nil {
-				panic(err)
-			}
-			changedFiles = append(changedFiles, filename)
-		}
-	}
-
-	return changedFiles
 }
 
 func hasEasyJSON(cg *ast.CommentGroup) bool {
@@ -274,14 +184,12 @@ func hasEasyJSON(cg *ast.CommentGroup) bool {
 	return false
 }
 
-func runEasyJSONTypesOnly(pkg *packages.Package, gens map[string]*types.Struct) error {
-	// Index: name -> *ast.TypeSpec, and file -> imports
+func runEasyJSONTypesOnly(pkg *packages.Package, gens map[*types.Named]*types.Struct) error {
 	typeSpecByName := map[string]*ast.TypeSpec{}
 	fileByName := map[string]*ast.File{}
-
 	fset := pkg.Fset
+
 	for _, f := range pkg.Syntax {
-		// Record all type specs in this file
 		for _, d := range f.Decls {
 			gd, ok := d.(*ast.GenDecl)
 			if !ok || gd.Tok != token.TYPE {
@@ -298,28 +206,40 @@ func runEasyJSONTypesOnly(pkg *packages.Package, gens map[string]*types.Struct) 
 		}
 	}
 
-	// Group target type names by directory of their declaring file
-	namesByDir := map[string][]string{}
-	for name := range gens {
-		ts := typeSpecByName[name]
-		if ts == nil {
-			continue
+	// ---- Partition targets into local vs external named types ----
+	localByDir := map[string][]string{} // dir -> []localTypeName
+	for n := range gens {
+		npkg := n.Obj().Pkg()
+		if npkg != nil && npkg.Path() == pkg.PkgPath {
+			// local
+			ts := typeSpecByName[n.Obj().Name()]
+			if ts == nil {
+				continue
+			}
+			filename := fset.Position(ts.Pos()).Filename
+			if filename == "" {
+				continue
+			}
+			dir := filepath.Dir(filename)
+			localByDir[dir] = append(localByDir[dir], n.Obj().Name())
 		}
-		filename := fset.Position(ts.Pos()).Filename
-		if filename == "" {
-			continue
-		}
-		dir := filepath.Dir(filename)
-		namesByDir[dir] = append(namesByDir[dir], name)
 	}
 
-	// For each dir, build a synthetic file with needed types and imports, run easyjson, bring back
-	for dir, roots := range namesByDir {
-		base := filepath.Base(dir)
+	// ---- Handle local types (lift type specs + imports, run easyjson) ----
+	for dir, roots := range localByDir {
+		pkgName := ""
+		if len(roots) > 0 {
+			if f := fileByName[roots[0]]; f != nil && f.Name != nil {
+				pkgName = f.Name.Name
+			}
+		}
+		if pkgName == "" {
+			pkgName = pkg.Name
+		}
 
-		// Collect transitive same-package named type dependencies (DFS over AST idents)
+		// Collect transitive same-package named type dependencies
 		seen := map[string]bool{}
-		order := make([]*ast.TypeSpec, 0, len(roots)*2) // rough
+		order := make([]*ast.TypeSpec, 0, len(roots)*2)
 		var addDeps func(name string)
 		addDeps = func(name string) {
 			if seen[name] {
@@ -330,16 +250,13 @@ func runEasyJSONTypesOnly(pkg *packages.Package, gens map[string]*types.Struct) 
 			if ts == nil {
 				return
 			}
-			// Recurse over referenced same-package type names
 			ast.Inspect(ts.Type, func(n ast.Node) bool {
 				id, ok := n.(*ast.Ident)
 				if !ok || id.Name == "" {
 					return true
 				}
-				// Resolve type names only
 				if obj, ok := pkg.TypesInfo.Uses[id]; ok {
 					if tn, ok := obj.(*types.TypeName); ok {
-						// Only same-package named types
 						if tn.Pkg() != nil && tn.Pkg().Path() == pkg.PkgPath {
 							addDeps(tn.Name())
 						}
@@ -353,11 +270,10 @@ func runEasyJSONTypesOnly(pkg *packages.Package, gens map[string]*types.Struct) 
 			addDeps(r)
 		}
 
-		// Build synthetic source: package + imports (union of import specs from declaring files) + types
+		// Build synthetic source: correct package + union of imports + the types
 		var src bytes.Buffer
-		fmt.Fprintf(&src, "package %s\n\n", base)
+		fmt.Fprintf(&src, "package easyjson_local\n\n")
 
-		// Gather imports from files that declare any included types; de-dup by import path literal
 		importSet := map[string]bool{}
 		var importSpecs []*ast.ImportSpec
 		seenFiles := map[*ast.File]bool{}
@@ -374,7 +290,6 @@ func runEasyJSONTypesOnly(pkg *packages.Package, gens map[string]*types.Struct) 
 				}
 				for _, s := range gd.Specs {
 					is := s.(*ast.ImportSpec)
-					// path literal as key (includes quotes)
 					key := ""
 					if is.Path != nil {
 						key = is.Path.Value
@@ -391,7 +306,6 @@ func runEasyJSONTypesOnly(pkg *packages.Package, gens map[string]*types.Struct) 
 			for _, is := range importSpecs {
 				var line bytes.Buffer
 				_ = printer.Fprint(&line, fset, is)
-				// Ensure trailing newline
 				if !strings.HasSuffix(line.String(), "\n") {
 					line.WriteByte('\n')
 				}
@@ -401,23 +315,18 @@ func runEasyJSONTypesOnly(pkg *packages.Package, gens map[string]*types.Struct) 
 			src.WriteString(")\n\n")
 		}
 
-		// Emit //easyjson:json and type specs in collected order
 		for _, ts := range order {
 			if !hasEasyJSON(ts.Doc) {
 				src.WriteString("//easyjson:json\n")
 			}
-			gd := &ast.GenDecl{
-				Tok:   token.TYPE,
-				Specs: []ast.Spec{ts},
-			}
+			gd := &ast.GenDecl{Tok: token.TYPE, Specs: []ast.Spec{ts}}
 			if err := printer.Fprint(&src, fset, gd); err != nil {
 				return err
 			}
 			src.WriteByte('\n')
 		}
 
-		// Temp workspace
-		tmp := "easyjson_types"
+		tmp := "easyjson_local"
 		err := os.Mkdir(tmp, 0755)
 		if err != nil {
 			return err
@@ -430,14 +339,13 @@ func runEasyJSONTypesOnly(pkg *packages.Package, gens map[string]*types.Struct) 
 			TabIndent: true,
 		})
 		if err != nil {
-			log.Printf("warning: goimports failed: %v", err)
-			formatted = src.Bytes() // fall back
+			log.Printf("warning: goimports failed (local): %v", err)
+			formatted = src.Bytes()
 		}
 		if err := os.WriteFile(filepath.Join(tmp, "types.go"), formatted, 0o644); err != nil {
 			return err
 		}
 
-		// Run easyjson
 		cmd := exec.Command("go", "run", "github.com/mailru/easyjson/easyjson@latest", "-all", ".")
 		cmd.Dir = tmp
 		cmd.Stdout = os.Stdout
@@ -450,24 +358,34 @@ func runEasyJSONTypesOnly(pkg *packages.Package, gens map[string]*types.Struct) 
 		if err != nil {
 			return err
 		}
-		for _, e := range ents {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), "_easyjson.go") {
+		var ezjson []os.DirEntry
+		for _, ent := range ents {
+			if ent.IsDir() || !strings.HasSuffix(ent.Name(), "_easyjson.go") {
 				continue
 			}
-			b, err := os.ReadFile(filepath.Join(tmp, e.Name()))
-			if err != nil {
-				return err
+
+			ezjson = append(ezjson, ent)
+		}
+
+		if len(ezjson) != 1 {
+			fmt.Println("expected 1 file in easyjson_local. Found", ezjson)
+		}
+
+		e := ezjson[0]
+		b, err := os.ReadFile(filepath.Join(tmp, e.Name()))
+		if err != nil {
+			return err
+		}
+		b = pkgLineRx.ReplaceAllFunc(b, func(line []byte) []byte {
+			if string(bytes.TrimSpace(line)) == "package easyjson_local" {
+				return []byte("package main")
 			}
-			b = pkgLineRx.ReplaceAllFunc(b, func(line []byte) []byte {
-				if string(bytes.TrimSpace(line)) == "package "+base {
-					return []byte("package main")
-				}
-				return line
-			})
-			dst := filepath.Join(dir, "json_generated.go")
-			if err := os.WriteFile(dst, b, 0o644); err != nil {
-				return err
-			}
+			return line
+		})
+		// Package header already correct; no rewrites to "main".
+		dst := filepath.Join(dir, "json_generated.go")
+		if err := os.WriteFile(dst, b, 0o644); err != nil {
+			return err
 		}
 	}
 
