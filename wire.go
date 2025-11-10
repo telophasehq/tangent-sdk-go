@@ -2,10 +2,11 @@ package tangent_sdk
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"sync"
 
+	"github.com/mailru/easyjson"
+	"github.com/mailru/easyjson/jwriter"
 	"github.com/telophasehq/tangent-sdk-go/internal/tangent/logs/log"
 	"github.com/telophasehq/tangent-sdk-go/internal/tangent/logs/mapper"
 
@@ -43,6 +44,7 @@ func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLogs[T]) {
 		buf.Reset()
 		defer bufPool.Put(buf)
 
+		var jw jwriter.Writer
 		items := append([]cm.Rep(nil), input.Slice()...)
 		for i := range items {
 
@@ -54,15 +56,15 @@ func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLogs[T]) {
 
 			Log(items[i]).ResourceDrop()
 
-			err = json.NewEncoder(buf).Encode(out)
-			if err != nil {
-				res.SetErr(err.Error())
-				return
+			if out_marshal, ok := any(out).(easyjson.Marshaler); ok {
+				out_marshal.MarshalEasyJSON(&jw)
+				jw.RawByte('\n')
+			} else {
+				panic("output does not implement easyjson.Marshaler. Did you recompile?")
 			}
-
 		}
 
-		res.SetOK(cm.ToList(buf.Bytes()))
+		res.SetOK(cm.ToList(jw.Buffer.Buf))
 		return
 	}
 }
