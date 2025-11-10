@@ -47,7 +47,6 @@ func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLogs[T]) {
 		var jw jwriter.Writer
 		items := append([]cm.Rep(nil), input.Slice()...)
 		for i := range items {
-
 			out, err := handler(Log(items[i]))
 			if err != nil {
 				res.SetErr(err.Error())
@@ -60,11 +59,18 @@ func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLogs[T]) {
 				out_marshal.MarshalEasyJSON(&jw)
 				jw.RawByte('\n')
 			} else {
-				panic("output does not implement easyjson.Marshaler. Did you recompile?")
+				res.SetErr("output does not implement easyjson.Marshaler. Did you recompile?")
+				return
 			}
 		}
 
-		res.SetOK(cm.ToList(jw.Buffer.Buf))
+		if jw.Error != nil {
+			res.SetErr(jw.Error.Error())
+			return
+		}
+
+		jw.DumpTo(buf)
+		res.SetOK(cm.ToList(buf.Bytes()))
 		return
 	}
 }
