@@ -39,21 +39,22 @@ func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLogs[T]) {
 		return cm.ToList(mapped)
 	}
 
-	mapper.Exports.ProcessLogs = func(input cm.List[cm.Rep]) (res cm.Result[cm.List[uint8], cm.List[uint8], string]) {
+	mapper.Exports.ProcessLogs = func(input cm.List[log.Logview]) (res cm.Result[cm.List[uint8], cm.List[uint8], string]) {
 		buf := bufPool.Get().(*bytes.Buffer)
 		buf.Reset()
 		defer bufPool.Put(buf)
 
 		var jw jwriter.Writer
-		items := append([]cm.Rep(nil), input.Slice()...)
-		for i := range items {
-			out, err := handler(Log(items[i]))
+
+		items := append([]log.Logview(nil), input.Slice()...)
+		for _, lv := range items {
+			out, err := handler(lv)
 			if err != nil {
 				res.SetErr(err.Error())
 				return
 			}
 
-			Log(items[i]).ResourceDrop()
+			lv.ResourceDrop()
 
 			if out_marshal, ok := any(out).(easyjson.Marshaler); ok {
 				out_marshal.MarshalEasyJSON(&jw)
