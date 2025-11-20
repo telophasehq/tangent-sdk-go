@@ -19,14 +19,11 @@ var (
 
 type Log = log.Logview
 
-type ProcessLogs[T any] func(Log) (T, error)
+type ProcessLog[T any] func(Log) (T, error)
+type ProcessLogs[T any] func([]Log) ([]T, error)
 
 // Wire connects metadata, probe selectors, and a handler to Tangent's ABI.
-func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLogs[T]) {
-	if handler == nil {
-		panic(errors.New("handler must not be nil"))
-	}
-
+func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLog[T], batchHandler ProcessLogs[T]) {
 	mapper.Exports.Metadata = func() mapper.Meta {
 		return meta.ToMapper()
 	}
@@ -46,22 +43,48 @@ func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLogs[T]) {
 
 		var jw jwriter.Writer
 
+		writeOut := func(out T) error {
+			outMarshal, ok := any(out).(easyjson.Marshaler)
+			if !ok {
+				return errors.New("output does not implement easyjson.Marshaler. Did you recompile?")
+			}
+			outMarshal.MarshalEasyJSON(&jw)
+			jw.RawByte('\n')
+			return nil
+		}
+
 		items := append([]log.Logview(nil), input.Slice()...)
-		for _, lv := range items {
-			out, err := handler(lv)
+		if batchHandler != nil {
+			outs, err := batchHandler(items)
+			for _, lv := range items {
+				lv.ResourceDrop()
+			}
 			if err != nil {
 				res.SetErr(err.Error())
 				return
 			}
-
-			lv.ResourceDrop()
-
-			if out_marshal, ok := any(out).(easyjson.Marshaler); ok {
-				out_marshal.MarshalEasyJSON(&jw)
-				jw.RawByte('\n')
-			} else {
-				res.SetErr("output does not implement easyjson.Marshaler. Did you recompile?")
+			if len(outs) != len(items) {
+				res.SetErr("batchHandler returned wrong number of outputs")
 				return
+			}
+			for _, out := range outs {
+				if err := writeOut(out); err != nil {
+					res.SetErr(err.Error())
+					return
+				}
+			}
+		} else {
+			for _, lv := range items {
+				out, err := handler(lv)
+				lv.ResourceDrop()
+				if err != nil {
+					res.SetErr(err.Error())
+					return
+				}
+				if err := writeOut(out); err != nil {
+					res.SetErr(err.Error())
+					return
+				}
 			}
 		}
 

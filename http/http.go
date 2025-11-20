@@ -1,0 +1,113 @@
+package http
+
+import (
+	"errors"
+	"fmt"
+
+	"github.com/telophasehq/tangent-sdk-go/internal/tangent/logs/remote"
+	"go.bytecodealliance.org/cm"
+)
+
+// RemoteCallBatch forwards a batch of RemoteRequest to the host via
+// tangent:remote/remote.call-batch and returns the mapped responses.
+//
+// This is the only place in the SDK that touches the generated remote bindings
+// and cm.List types.
+func RemoteCallBatch(reqs []RemoteRequest) ([]RemoteResponse, error) {
+	// Map SDK-level RemoteRequest -> generated remote.Request
+	internal := make([]remote.Request, len(reqs))
+
+	for i, r := range reqs {
+		// Method mapping
+		var m remote.Method
+		switch r.Method {
+		case RemoteMethodGet:
+			m = remote.MethodGet
+		case RemoteMethodPost:
+			m = remote.MethodPost
+		case RemoteMethodPut:
+			m = remote.MethodPut
+		case RemoteMethodDelete:
+			m = remote.MethodDelete
+		case RemoteMethodPatch:
+			m = remote.MethodPatch
+		default:
+			return nil, fmt.Errorf("invalid RemoteMethod: %d", r.Method)
+		}
+
+		hdrs := make([][2]string, len(r.Headers))
+		for j, h := range r.Headers {
+			hdrs[j] = [2]string{h.Name, h.Value}
+		}
+
+		var timeoutOpt cm.Option[uint32]
+		if r.TimeoutMs != nil {
+			timeoutOpt = cm.Some(*r.TimeoutMs)
+		} else {
+			timeoutOpt = cm.None[uint32]()
+		}
+
+		var cacheTtlOpt cm.Option[uint32]
+		if r.CacheTtlMs != nil {
+			cacheTtlOpt = cm.Some(*r.CacheTtlMs)
+		} else {
+			cacheTtlOpt = cm.None[uint32]()
+		}
+
+		internal[i] = remote.Request{
+			ID:         r.ID,
+			Method:     m,
+			URL:        r.URL,
+			Headers:    cm.ToList(hdrs),
+			Body:       cm.ToList(r.Body),
+			TimeoutMs:  timeoutOpt,
+			CacheTTLMs: cacheTtlOpt,
+		}
+	}
+
+	// Call host via generated binding. The exact signature depends on the
+	// generator, but it will be something like:
+	//
+	//   func CallBatch(reqs cm.List[Request]) (cm.Result[cm.List[Response], string])
+	//
+	result := remote.CallBatch(cm.ToList(internal))
+
+	if result.IsErr() {
+		// Top-level error (e.g. host rejected the batch entirely)
+		return nil, errors.New(*result.Err())
+	}
+
+	respList := result.OK().Slice()
+	out := make([]RemoteResponse, len(respList))
+
+	for i, r := range respList {
+		// Map headers back
+		hdrs := r.Headers.Slice()
+		outHeaders := make([]RemoteHeader, len(hdrs))
+		for j, h := range hdrs {
+			outHeaders[j] = RemoteHeader{
+				Name:  h[0],
+				Value: h[1],
+			}
+		}
+
+		// Body is a cm.List[uint8]; convert to []byte
+		bodyBytes := append([]byte(nil), r.Body.Slice()...)
+
+		var errPtr *string
+		if r.Error.Some() != nil {
+			e := r.Error.Some()
+			errPtr = e
+		}
+
+		out[i] = RemoteResponse{
+			ID:      r.ID,
+			Status:  r.Status,
+			Headers: outHeaders,
+			Body:    bodyBytes,
+			Error:   errPtr,
+		}
+	}
+
+	return out, nil
+}
