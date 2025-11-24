@@ -10,27 +10,27 @@ const (
 	RemoteMethodPatch
 )
 
-// RemoteHeader is a simple name/value header.
-type RemoteHeader struct {
+// Header is a simple name/value header.
+type Header struct {
 	Name  string
 	Value string
 }
 
-type RemoteRequest struct {
+type Request struct {
 	ID         string
 	Method     RemoteMethod
 	URL        string
-	Headers    []RemoteHeader
+	Headers    []Header
 	Body       []byte
 	TimeoutMs  *uint32 // nil => no explicit timeout
 	CacheTtlMs *uint32 // hint; host may ignore
 }
 
-// RemoteResponse mirrors tangent:remote@0.1.0.response.
-type RemoteResponse struct {
+// Response mirrors tangent:remote@0.1.0.response.
+type Response struct {
 	ID      string
 	Status  uint16
-	Headers []RemoteHeader
+	Headers []Header
 	Body    []byte
 	Error   *string
 }
