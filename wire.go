@@ -17,8 +17,6 @@ var (
 	bufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 )
 
-type Log = log.Logview
-
 type ProcessLog[T any] func(Log) (T, error)
 type ProcessLogs[T any] func([]Log) ([]T, error)
 
@@ -55,10 +53,15 @@ func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLog[T], bat
 
 		items := append([]log.Logview(nil), input.Slice()...)
 		if batchHandler != nil {
-			outs, err := batchHandler(items)
+			var logviews []Log
 			for _, lv := range items {
-				lv.ResourceDrop()
+				logviews = append(logviews, Log{logview: lv})
 			}
+			outs, err := batchHandler(logviews)
+			for _, lv := range logviews {
+				lv.logview.ResourceDrop()
+			}
+			logviews = logviews[:0]
 			if err != nil {
 				res.SetErr(err.Error())
 				return
@@ -75,7 +78,7 @@ func Wire[T any](meta Metadata, selectors []Selector, handler ProcessLog[T], bat
 			}
 		} else {
 			for _, lv := range items {
-				out, err := handler(lv)
+				out, err := handler(Log{logview: lv})
 				lv.ResourceDrop()
 				if err != nil {
 					res.SetErr(err.Error())

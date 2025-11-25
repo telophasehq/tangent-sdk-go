@@ -21,15 +21,15 @@ func CallBatch(reqs []Request) ([]Response, error) {
 		// Method mapping
 		var m remote.Method
 		switch r.Method {
-		case RemoteMethodGet:
+		case MethodGet:
 			m = remote.MethodGet
-		case RemoteMethodPost:
+		case MethodPost:
 			m = remote.MethodPost
-		case RemoteMethodPut:
+		case MethodPut:
 			m = remote.MethodPut
-		case RemoteMethodDelete:
+		case MethodDelete:
 			m = remote.MethodDelete
-		case RemoteMethodPatch:
+		case MethodPatch:
 			m = remote.MethodPatch
 		default:
 			return nil, fmt.Errorf("invalid RemoteMethod: %d", r.Method)
@@ -121,15 +121,15 @@ func Call(req Request) (Response, error) {
 	// Method mapping
 	var m remote.Method
 	switch req.Method {
-	case RemoteMethodGet:
+	case MethodGet:
 		m = remote.MethodGet
-	case RemoteMethodPost:
+	case MethodPost:
 		m = remote.MethodPost
-	case RemoteMethodPut:
+	case MethodPut:
 		m = remote.MethodPut
-	case RemoteMethodDelete:
+	case MethodDelete:
 		m = remote.MethodDelete
-	case RemoteMethodPatch:
+	case MethodPatch:
 		m = remote.MethodPatch
 	default:
 		return Response{}, fmt.Errorf("invalid RemoteMethod: %d", req.Method)

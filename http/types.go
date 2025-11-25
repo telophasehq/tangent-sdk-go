@@ -1,13 +1,13 @@
 package http
 
-type RemoteMethod int
+type Method int
 
 const (
-	RemoteMethodGet RemoteMethod = iota
-	RemoteMethodPost
-	RemoteMethodPut
-	RemoteMethodDelete
-	RemoteMethodPatch
+	MethodGet Method = iota
+	MethodPost
+	MethodPut
+	MethodDelete
+	MethodPatch
 )
 
 // Header is a simple name/value header.
@@ -18,7 +18,7 @@ type Header struct {
 
 type Request struct {
 	ID         string
-	Method     RemoteMethod
+	Method     Method
 	URL        string
 	Headers    []Header
 	Body       []byte

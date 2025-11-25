@@ -171,3 +171,14 @@ func (self Logview) Len(path string) (result cm.Option[uint32]) {
 	wasmimport_LogviewLen((uint32)(self0), (*uint8)(path0), (uint32)(path1), &result)
 	return
 }
+
+// Log represents the imported method "log".
+//
+//	log: func() -> string
+//
+//go:nosplit
+func (self Logview) Log() (result string) {
+	self0 := cm.Reinterpret[uint32](self)
+	wasmimport_LogviewLog((uint32)(self0), &result)
+	return
+}
